@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>UNESCO World Heritage Globe</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: radial-gradient(circle at top, #0b1f3a 0%, #050910 70%);
+      color: #f6f8ff;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    header {
+      padding: 1.5rem clamp(1rem, 4vw, 3rem);
+      text-align: center;
+    }
+
+    h1 {
+      font-size: clamp(1.5rem, 4vw, 2.5rem);
+      margin: 0 0 0.25rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    p.subtitle {
+      margin: 0;
+      font-size: clamp(0.9rem, 2.4vw, 1.05rem);
+      opacity: 0.75;
+    }
+
+    main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 0 clamp(1rem, 5vw, 3rem) 3rem;
+      gap: 1rem;
+      position: relative;
+    }
+
+    #globe-container {
+      width: min(90vw, 900px);
+      aspect-ratio: 1 / 1;
+      position: relative;
+      border-radius: 50%;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
+    }
+
+    #globe-container canvas {
+      width: 100% !important;
+      height: 100% !important;
+      border-radius: 50%;
+      display: block;
+    }
+
+    #status {
+      font-size: 0.95rem;
+      text-align: center;
+      opacity: 0.85;
+    }
+
+    #tooltip {
+      position: fixed;
+      pointer-events: none;
+      background: rgba(14, 24, 42, 0.85);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 10px;
+      padding: 0.75rem 1rem;
+      max-width: min(320px, 70vw);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+      display: none;
+      font-size: 0.85rem;
+      line-height: 1.4;
+    }
+
+    #legend {
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+      justify-content: center;
+      font-size: 0.85rem;
+      opacity: 0.85;
+    }
+
+    .legend-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .legend-swatch {
+      width: 14px;
+      height: 14px;
+      border-radius: 999px;
+    }
+
+    footer {
+      text-align: center;
+      font-size: 0.8rem;
+      opacity: 0.6;
+      padding-bottom: 1.5rem;
+    }
+  </style>
+  <script src="https://unpkg.com/three@0.158.0/build/three.min.js" defer></script>
+  <script src="https://unpkg.com/three@0.158.0/examples/js/controls/OrbitControls.js" defer></script>
+  <script src="https://unpkg.com/three-globe@2.28.3/dist/three-globe.min.js" defer></script>
+  <script>
+    const DATA_URL = "https://whc.unesco.org/en/list/xml/";
+    const CATEGORY_COLORS = {
+      cultural: "#f94144",
+      natural: "#43aa8b",
+      mixed: "#577590"
+    };
+
+    function normalizeCategory(value) {
+      if (!value) return "unknown";
+      const lower = value.trim().toLowerCase();
+      if (lower.includes("cultural")) return "cultural";
+      if (lower.includes("natural")) return "natural";
+      if (lower.includes("mixed")) return "mixed";
+      return "unknown";
+    }
+
+    function extractText(node, candidates) {
+      for (const candidate of candidates) {
+        const direct = node.getElementsByTagName(candidate)[0];
+        if (direct && direct.textContent.trim()) {
+          return direct.textContent.trim();
+        }
+        const queried = node.querySelector(candidate);
+        if (queried && queried.textContent.trim()) {
+          return queried.textContent.trim();
+        }
+      }
+      return "";
+    }
+
+    function parseSites(xmlDoc) {
+      const candidateContainers = [
+        ...xmlDoc.querySelectorAll("row"),
+        ...xmlDoc.querySelectorAll("site"),
+        ...xmlDoc.querySelectorAll("item"),
+        ...xmlDoc.querySelectorAll("record")
+      ];
+
+      let uniqueNodes = Array.from(new Set(candidateContainers));
+      if (!uniqueNodes.length && xmlDoc.documentElement) {
+        uniqueNodes = Array.from(xmlDoc.documentElement.children);
+      }
+
+      const sites = uniqueNodes.map((node) => {
+        const latitude = parseFloat(
+          extractText(node, ["latitude", "lat", "geo>latitude"])
+        );
+        const longitude = parseFloat(
+          extractText(node, ["longitude", "lng", "long", "geo>longitude"])
+        );
+
+        if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+          return null;
+        }
+
+        const name = extractText(node, ["name_en", "name", "title"]);
+        const country = extractText(node, [
+          "statesname_en",
+          "country",
+          "location",
+          "states",
+          "region_en"
+        ]);
+        const categoryRaw = extractText(node, [
+          "category",
+          "category_short",
+          "category_long",
+          "heritage",
+          "type"
+        ]);
+        const inscriptionYear = extractText(node, [
+          "date_inscribed",
+          "year",
+          "inscription_year"
+        ]);
+
+        const tooltipHtml = [
+          '<div class="tooltip-content">',
+          `<strong>${name || "Unknown site"}</strong><br />`,
+          `${country || "Unknown location"}<br />`,
+          `Category: ${categoryRaw || "Unspecified"}`,
+          inscriptionYear ? `<br />Inscribed: ${inscriptionYear}` : "",
+          "</div>"
+        ].join("");
+
+        return {
+          name: name || "Unknown site",
+          country: country || "Unknown location",
+          category: normalizeCategory(categoryRaw),
+          categoryLabel: categoryRaw || "Unspecified",
+          inscriptionYear,
+          lat: latitude,
+          lng: longitude,
+          tooltip: tooltipHtml
+        };
+      });
+
+      return sites.filter(Boolean);
+    }
+
+    function initialiseGlobe() {
+      const container = document.getElementById("globe-container");
+      const statusEl = document.getElementById("status");
+      const tooltip = document.getElementById("tooltip");
+
+      const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.setSize(container.clientWidth, container.clientHeight);
+      container.appendChild(renderer.domElement);
+
+      const scene = new THREE.Scene();
+
+      const camera = new THREE.PerspectiveCamera(
+        45,
+        container.clientWidth / container.clientHeight,
+        0.1,
+        2000
+      );
+      camera.position.set(0, 0, 360);
+
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
+      scene.add(ambientLight);
+
+      const directionalLight = new THREE.DirectionalLight(0xffffff, 0.9);
+      directionalLight.position.set(1, 1, 1);
+      scene.add(directionalLight);
+
+      const globe = new ThreeGlobe()
+        .globeImageUrl("https://unpkg.com/three-globe/example/img/earth-dark.jpg")
+        .bumpImageUrl("https://unpkg.com/three-globe/example/img/earth-topology.png")
+        .pointsData([])
+        .pointAltitude(0.015)
+        .pointColor((site) => CATEGORY_COLORS[site.category] || "#f9c74f")
+        .pointLabel((site) => site.tooltip);
+
+      scene.add(globe);
+
+      const controls = new THREE.OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.enablePan = false;
+      controls.minDistance = 180;
+      controls.maxDistance = 500;
+      controls.autoRotate = true;
+      controls.autoRotateSpeed = 0.85;
+
+      let pointer = { x: 0, y: 0 };
+      renderer.domElement.addEventListener("mousemove", (event) => {
+        pointer = { x: event.clientX, y: event.clientY };
+        if (tooltip.style.display === "block") {
+          tooltip.style.left = `${pointer.x + 16}px`;
+          tooltip.style.top = `${pointer.y + 16}px`;
+        }
+      });
+
+      globe.onPointHover((site) => {
+        if (!site) {
+          tooltip.style.display = "none";
+          return;
+        }
+        tooltip.innerHTML = site.tooltip;
+        tooltip.style.display = "block";
+        tooltip.style.left = `${pointer.x + 16}px`;
+        tooltip.style.top = `${pointer.y + 16}px`;
+      });
+
+      async function loadData() {
+        statusEl.textContent = "Loading UNESCO World Heritage data...";
+        try {
+          const response = await fetch(DATA_URL);
+          if (!response.ok) {
+            throw new Error(`Request failed with status ${response.status}`);
+          }
+          const xmlText = await response.text();
+          const parser = new DOMParser();
+          const xmlDoc = parser.parseFromString(xmlText, "application/xml");
+          const parseError = xmlDoc.querySelector("parsererror");
+          if (parseError) {
+            throw new Error("Unable to parse XML response");
+          }
+          const sites = parseSites(xmlDoc);
+          if (!sites.length) {
+            throw new Error("No site data could be extracted from the XML response");
+          }
+          globe.pointsData(sites);
+          statusEl.textContent = `Loaded ${sites.length} World Heritage sites.`;
+        } catch (error) {
+          console.error(error);
+          statusEl.textContent = "Unable to load UNESCO World Heritage data. Please try again later.";
+        }
+      }
+
+      function resizeRenderer() {
+        const { clientWidth, clientHeight } = container;
+        renderer.setSize(clientWidth, clientHeight);
+        camera.aspect = clientWidth / clientHeight;
+        camera.updateProjectionMatrix();
+      }
+
+      window.addEventListener("resize", resizeRenderer);
+      resizeRenderer();
+
+      (function animate() {
+        requestAnimationFrame(animate);
+        controls.update();
+        renderer.render(scene, camera);
+      })();
+
+      loadData();
+    }
+
+    window.addEventListener("DOMContentLoaded", initialiseGlobe);
+  </script>
+</head>
+<body>
+  <header>
+    <h1>UNESCO World Heritage Globe</h1>
+    <p class="subtitle">Explore cultural, natural, and mixed heritage sites around the world.</p>
+  </header>
+  <main>
+    <div id="globe-container"></div>
+    <div id="legend">
+      <span class="legend-item"><span class="legend-swatch" style="background: #f94144"></span> Cultural</span>
+      <span class="legend-item"><span class="legend-swatch" style="background: #43aa8b"></span> Natural</span>
+      <span class="legend-item"><span class="legend-swatch" style="background: #577590"></span> Mixed</span>
+      <span class="legend-item"><span class="legend-swatch" style="background: #f9c74f"></span> Other</span>
+    </div>
+    <div id="status" role="status" aria-live="polite"></div>
+    <div id="tooltip"></div>
+  </main>
+  <footer>
+    Data source: <a href="https://whc.unesco.org/en/list/" target="_blank" rel="noreferrer noopener">UNESCO World Heritage List</a>
+  </footer>
+</body>
+</html>
